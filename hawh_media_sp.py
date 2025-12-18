@@ -34,13 +34,15 @@ logger.add(
 class HAWHMediaSpider:
     """HAWH媒体爬虫 - 爬取音视频节目信息和媒体链接"""
 
-    def __init__(self, docker_url: str = "http://172.17.13.16:11235"):
+    def __init__(self, docker_url: str = "http://172.17.13.16:11235", only_latest: bool = False, latest_count: int = 10):
         self.docker_url = docker_url
         self.base_url = "http://www.hawh.cn/hawh/audioVisual/index.html"
         self.all_programs = []
         self.all_categories = []
         self.output_dir = Path("hawh_data")
         self.output_dir.mkdir(exist_ok=True)
+        self.only_latest = only_latest
+        self.latest_count = latest_count
 
     async def crawl(self, url: str, wait_for: Optional[str] = None):
         """使用crawl4ai Docker客户端爬取页面内容"""
@@ -49,7 +51,8 @@ class HAWHMediaSpider:
                 exclude_external_links=False,
                 remove_overlay_elements=False,
                 excluded_tags=['form', 'header', 'footer', 'nav', 'aside'],
-                excluded_selector='#mozi-assist, #main > section.main__body.article.main__body__article-wrap > div > div > div > article > div.common-component-content-share-box.share-component.social-share '                )
+                wait_for=wait_for
+                )
             browser_config = BrowserConfig(headless=True)
 
             try:
@@ -70,7 +73,6 @@ class HAWHMediaSpider:
         for item in internal_links:
             try:
                 item_url = item.get('href', '')
-                item_text = item.get('title', '')
 
                 # 过滤条件：URL要以audioVisual开头且以index.html结尾
                 if (item_url.startswith('http://www.hawh.cn/hawh/audioVisual') and
@@ -222,7 +224,7 @@ class HAWHMediaSpider:
             # --- 2. 探测总页数 ---
             soup = BeautifulSoup(first_page_html, 'html.parser')
             pagination_input = soup.select_one('input.common-component-pagination-input[name="pageIndex"]')
-            
+
             total_pages = 1
             if pagination_input and pagination_input.has_attr('max'):
                 try:
@@ -230,22 +232,30 @@ class HAWHMediaSpider:
                     logger.info(f"检测到分页组件，最大页数为: {total_pages}")
                 except ValueError:
                     pass
-            
-            # --- 3. 循环爬取剩余页面 ---
-            if total_pages > 1:
+
+            # --- 3. 循环爬取剩余页面（仅在不是只爬最新时进行）---
+            if not self.only_latest and total_pages > 1:
+                logger.info(f"开始爬取剩余页面（共{total_pages}页）")
                 for page_num in range(2, total_pages + 1):
                     separator = "&" if "?" in category_url else "?"
                     page_url = f"{category_url}{separator}pageIndex={page_num}"
-                    
+
                     logger.info(f"正在爬取第 {page_num}/{total_pages} 页: {page_url}")
-                    
+
                     try:
                         page_results = await self.crawl(page_url, wait_for=wait_selector)
                         new_programs = self.extract_programs_from_html(page_results.html, category_url)
                         all_programs.extend(new_programs)
-                        
+
                     except Exception as e:
                         logger.error(f"爬取第 {page_num} 页失败: {e}")
+            elif self.only_latest:
+                logger.info(f"启用最新模式：只爬取第一页，限制{self.latest_count}条")
+
+            # --- 4. 如果启用最新只爬取，限制节目数量 ---
+            if self.only_latest and len(all_programs) > self.latest_count:
+                all_programs = all_programs[:self.latest_count]
+                logger.info(f"只保留最新的 {self.latest_count} 个节目")
 
         except Exception as e:
             logger.error(f"爬取栏目失败: {e}")
@@ -333,42 +343,22 @@ class HAWHMediaSpider:
             json.dump(self.all_programs, f, ensure_ascii=False, indent=2)
         logger.info(f"节目信息: {programs_file} ({len(self.all_programs)} 条)")
 
-        # 保存媒体链接
-        media_links_file = self.output_dir / "media_links.json"
-        media_data = [
-            {
-                'program_title': p['title'],
-                'category': p['category'],
-                'program_url': p['url'],
-                'media_urls': p.get('media_urls', []),
-                'media_count': p.get('media_count', 0)
-            }
-            for p in self.all_programs if p.get('media_urls')
-        ]
-        with open(media_links_file, 'w', encoding='utf-8') as f:
-            json.dump(media_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"媒体链接: {media_links_file} ({len(media_data)} 条)")
-
-        # 保存CSV格式（用于表格查看）
-        csv_file = self.output_dir / "programs_summary.csv"
-        if self.all_programs:
-            with open(csv_file, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerow(['栏目', '节目标题', '节目链接', '媒体数量', '爬取时间'])
-                for p in self.all_programs:
-                    writer.writerow([
-                        p.get('category', ''),
-                        p.get('title', ''),
-                        p.get('url', ''),
-                        p.get('media_count', 0),
-                        p.get('crawler_time', '')
-                    ])
-            logger.info(f"汇总表格: {csv_file}")
 
 
 async def main():
     """主函数"""
-    spider = HAWHMediaSpider(docker_url="http://172.17.13.16:11235")
+    import argparse
+    parser = argparse.ArgumentParser(description='HAWH媒体爬虫')
+    parser.add_argument('--latest', action='store_true', help='只爬取最新的节目（只爬第一页）')
+    parser.add_argument('--count', type=int, default=10, help='最新节目的数量（默认10）')
+    parser.add_argument('--docker-url', type=str, default="http://172.17.13.16:11235", help='Docker服务地址')
+    args = parser.parse_args()
+
+    spider = HAWHMediaSpider(
+        docker_url=args.docker_url,
+        only_latest=args.latest,
+        latest_count=args.count
+    )
     await spider.run()
 
 
