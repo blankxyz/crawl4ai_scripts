@@ -2,8 +2,8 @@ import scrapy
 from scrapy.crawler import CrawlerProcess
 
 from urllib.parse import urlparse, parse_qs
-
-from crawlab import save_item
+import re
+# from crawlab import save_item
 
 # ==========================================
 # 1. 定义 Pipeline (数据处理逻辑)
@@ -12,10 +12,12 @@ class MyCustomPipeline:
 
     def process_item(self, item, spider):
         # 【在这里写存入 MySQL / MongoDB 的代码】
+        
         # 示例：写入 JSONL 文件
-        save_item(item)  # 使用 Crawlab 提供的保存方法
+        # save_item(item)  # 使用 Crawlab 提供的保存方法
         # 打印日志证明 Pipeline 在工作
-        print(f">>> Pipeline 捕获数据: {item['title']}")
+        print(f">>> Pipeline ============捕获数据: {item['page_url']}")
+        print(f">>> Pipeline 捕获数据: {item['cover_image']}")
         return item
     
 # ==========================================
@@ -46,44 +48,50 @@ class HawhFinalSpider(scrapy.Spider):
         # ==========================================================
         # thumbnail_link: 用于 "动态" 等文字列表
         # block_link: 用于 "非遗"、"老片" 等图片方块列表
-        article_nodes  = response.css(
-            'li.article__thumbnail__item a.article__thumbnail__link::attr(href), '
-            'li.article__block__item a.article__block__link::attr(href)'
-        )
-        
-        self.logger.info(f"列表页 {response.url} 提取到 {len(article_nodes)} 篇文章")
+        # 1. 选中列表项容器
+        article_nodes = response.css('li.article__block__item')
+        self.logger.info(f"列表页 {response.url} 提取到 {len(article_nodes)} 个文章节点")
         
         for node in article_nodes:
-            # 1. 提取文章链接
-            link = node.css('a.article__thumbnail__link::attr(href), a.article__block__link::attr(href)').get()
+            # ==========================
+            # 修复点：放宽链接提取条件
+            # ==========================
+            # 只要是 li 里面的 a 标签，就提取它的 href
+            link = node.css('a::attr(href)').get()
             
             if not link:
+                self.logger.warning(f"节点中未找到链接，跳过: {node.get()[:50]}...")
                 continue
 
             # 2. 提取图片链接
             # 图片通常在 style="background-image: url('...')" 或者 <img> 标签中
             # 先尝试提取 style 属性
-            style_attr = node.css('.aspect-ratio-content::attr(style)').get()
-            img_url = None
+            # --- B. 提取背景图片 (针对你提供的 HTML 结构) ---
+            # 目标 HTML: <div class="aspect-ratio-content" style="background-image: url('http://...');"></div>
             
-            if style_attr:
-                # 使用正则从 style 字符串中提取 url('...') 内容
-                match = re.search(r'url\([\'"]?([^\'"\)]+)[\'"]?\)', style_attr)
+            # 步骤 1: 获取 style 属性的完整内容
+            style_text = node.css('.aspect-ratio-content::attr(style)').get()
+            
+            cover_img = None
+            if style_text:
+                # 步骤 2: 使用正则提取 url('...') 中间的内容
+                # 解释: url\s*\(  匹配 url(
+                #      ['"]?    匹配可选的单引号或双引号
+                #      (.*?)    非贪婪匹配，提取我们要的链接
+                #      ['"]?    匹配可选的结束引号
+                #      \)       匹配结束括号
+                import re
+                match = re.search(r"url\s*\(\s*['\"]?(.*?)['\"]?\s*\)", style_text)
                 if match:
-                    img_url = match.group(1)
+                    cover_img = match.group(1)
             
-            # 如果 style 里没找到，尝试找 img 标签 (备用)
-            if not img_url:
-                img_url = node.css('img::attr(src)').get()
-            
-            # 拼接绝对路径
-            if img_url and not img_url.startswith('http'):
-                img_url = response.urljoin(img_url)
+            # 步骤 3: 如果提取到了，确保是绝对路径
+            if cover_img and not cover_img.startswith('http'):
+                cover_img = response.urljoin(cover_img)
 
             # 3. 带着图片信息去访问详情页
             # 使用 meta 参数传递数据
-            yield response.follow(link, callback=self.parse_detail, meta={'cover_image': img_url})
-
+            yield response.follow(link, callback=self.parse_detail, meta={'cover_image': cover_img})
 
         # ==========================================================
         # 翻页逻辑 (保持智能判断)
