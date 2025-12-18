@@ -46,15 +46,43 @@ class HawhFinalSpider(scrapy.Spider):
         # ==========================================================
         # thumbnail_link: 用于 "动态" 等文字列表
         # block_link: 用于 "非遗"、"老片" 等图片方块列表
-        article_links = response.css(
+        article_nodes  = response.css(
             'li.article__thumbnail__item a.article__thumbnail__link::attr(href), '
             'li.article__block__item a.article__block__link::attr(href)'
-        ).getall()
+        )
         
-        self.logger.info(f"列表页 {response.url} 提取到 {len(article_links)} 篇文章")
+        self.logger.info(f"列表页 {response.url} 提取到 {len(article_nodes)} 篇文章")
         
-        for link in article_links:
-            yield response.follow(link, callback=self.parse_detail)
+        for node in article_nodes:
+            # 1. 提取文章链接
+            link = node.css('a.article__thumbnail__link::attr(href), a.article__block__link::attr(href)').get()
+            
+            if not link:
+                continue
+
+            # 2. 提取图片链接
+            # 图片通常在 style="background-image: url('...')" 或者 <img> 标签中
+            # 先尝试提取 style 属性
+            style_attr = node.css('.aspect-ratio-content::attr(style)').get()
+            img_url = None
+            
+            if style_attr:
+                # 使用正则从 style 字符串中提取 url('...') 内容
+                match = re.search(r'url\([\'"]?([^\'"\)]+)[\'"]?\)', style_attr)
+                if match:
+                    img_url = match.group(1)
+            
+            # 如果 style 里没找到，尝试找 img 标签 (备用)
+            if not img_url:
+                img_url = node.css('img::attr(src)').get()
+            
+            # 拼接绝对路径
+            if img_url and not img_url.startswith('http'):
+                img_url = response.urljoin(img_url)
+
+            # 3. 带着图片信息去访问详情页
+            # 使用 meta 参数传递数据
+            yield response.follow(link, callback=self.parse_detail, meta={'cover_image': img_url})
 
 
         # ==========================================================
@@ -96,7 +124,12 @@ class HawhFinalSpider(scrapy.Spider):
 
     def parse_detail(self, response):
         """ 第三层：详情页 """
+
+
         item = {}
+
+        item['cover_image'] = response.meta.get('cover_image', '')
+        
         item['page_url'] = response.url
         item['title'] = response.css('h2.article__title::text').get(default='').strip()
         
@@ -104,15 +137,30 @@ class HawhFinalSpider(scrapy.Spider):
         if item['video_url']:
             item['video_url'] = response.urljoin(item['video_url'])
             
+        # ==========================================================
+        # 提取作者和发布时间 (兼容 "作者" 和 "来源" 两种写法)
+        # ==========================================================
         meta_items = response.css('.body__article__meta .body__article__meta-item::text').getall()
-        item['author'] = ''
+        
+        item['author'] = '管理员'
         item['publish_time'] = ''
+
         for meta in meta_items:
             text = meta.strip()
-            if "来源" in text:
+            
+            # 情况1: 提取 "作者" (例如: 作者：管理员)
+            if "作者" in text:
+                item['author'] = text.replace("作者：", "").replace("作者:", "").strip()
+            
+            # 情况2: 提取 "来源" (例如: 来源：新华社) - 如果没找到作者，来源也可以作为作者字段
+            elif "来源" in text and not item['author']:
                 item['author'] = text.replace("来源：", "").replace("来源:", "").strip()
+            
+            # 情况3: 提取时间
             elif "时间" in text or "-" in text: 
-                item['publish_time'] = text.replace("发布时间：", "").replace("发布时间:", "").strip()
+                # 简单判断是否包含 "发布时间" 字样或者类似 2018-01-11 的日期格式
+                clean_time = text.replace("发布时间：", "").replace("发布时间:", "").strip()
+                item['publish_time'] = clean_time
 
         breadcrumb_items = response.css('ol.breadcrumb li.breadcrumb-item')
         item['category'] = "其他"
