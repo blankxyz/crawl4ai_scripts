@@ -1,6 +1,26 @@
 import scrapy
+from scrapy.crawler import CrawlerProcess
+
 from urllib.parse import urlparse, parse_qs
 
+from crawlab import save_item
+
+# ==========================================
+# 1. 定义 Pipeline (数据处理逻辑)
+# ==========================================
+class MyCustomPipeline:
+
+    def process_item(self, item, spider):
+        # 【在这里写存入 MySQL / MongoDB 的代码】
+        # 示例：写入 JSONL 文件
+        save_item(item)  # 使用 Crawlab 提供的保存方法
+        # 打印日志证明 Pipeline 在工作
+        print(f">>> Pipeline 捕获数据: {item['title']}")
+        return item
+    
+# ==========================================
+# 2. 定义 Spider (爬虫逻辑)
+# ==========================================    
 class HawhFinalSpider(scrapy.Spider):
     name = 'hawh_final'
     allowed_domains = ['hawh.cn']
@@ -103,3 +123,25 @@ class HawhFinalSpider(scrapy.Spider):
 
         if item['video_url']:
             yield item
+
+
+# ==========================================
+# 3. 启动逻辑 (核心配置)
+# ==========================================
+if __name__ == "__main__":
+    process = CrawlerProcess(settings={
+        # --- 核心：在这里配置 PIPELINES ---
+        'ITEM_PIPELINES': {
+            # 这里的 Key 是类名（如果类在当前文件）或者 '模块名.类名'
+            # Value 是优先级 (1-1000)
+            '__main__.MyCustomPipeline': 300, 
+        },
+        
+        # 其他设置
+        "USER_AGENT": "Mozilla/5.0 ...",
+        "ROBOTSTXT_OBEY": False,
+        "LOG_LEVEL": "INFO",
+    })
+
+    process.crawl(HawhFinalSpider)
+    process.start()
