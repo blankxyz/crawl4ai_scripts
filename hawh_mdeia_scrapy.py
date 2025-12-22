@@ -185,8 +185,26 @@ if __name__ == "__main__":
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         "ROBOTSTXT_OBEY": False,
         "LOG_LEVEL": "INFO",
+       # ====================================================
+        # 限速设置 (请根据需要调整数值)
+        # ====================================================
+        
+        # 1. 下载延迟 (单位: 秒)
+        # 设置为 2 秒，意味着每两个请求之间至少间隔 2 秒
+        # Scrapy 会默认在 0.5 * DELAY 到 1.5 * DELAY 之间随机波动 (即 1s - 3s)
+        #  "DOWNLOAD_DELAY": 2, 
+        # AUTOTHROTTLE_ENABLED (高级选项):
+        # 如果你不想手动设置秒数，可以添加 "AUTOTHROTTLE_ENABLED": True。Scrapy 会根据服务器的响应速度自动调整延迟（服务器慢它就慢，服务器快它就快）。
+
+        "AUTOTHROTTLE_ENABLED": True, 
+
+        # 3. 降低并发数 (默认是 16)
+        # 如果你觉得还是太快，把这个数字改小，比如 5 或 1
+        # 设置为 1 就像浏览器一样，一次只加载一个页面
         "CONCURRENT_REQUESTS": 4,
-        "AUTOTHROTTLE_ENABLED": True
+        
+        # 4. 针对域名的并发限制
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 4,
     })
 
     process.crawl(HawhFinalSpider)
