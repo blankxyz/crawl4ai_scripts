@@ -186,10 +186,8 @@ class HawhFinalSpider(scrapy.Spider):
 # ==========================================
 if __name__ == "__main__":
     process = CrawlerProcess(settings={
-        # --- 核心：在这里配置 PIPELINES ---
+
         'ITEM_PIPELINES': {
-            # 这里的 Key 是类名（如果类在当前文件）或者 '模块名.类名'
-            # Value 是优先级 (1-1000)
             '__main__.MyCustomPipeline': 300, 
         },
         
